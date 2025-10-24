@@ -1,5 +1,5 @@
 // ============================================
-// AUTH DTOs
+// AUTH DTOs (IMPROVED)
 // src/auth/dto/auth.dto.ts
 // ============================================
 
@@ -76,11 +76,21 @@ export class RegisterDto {
 }
 
 export class AuthResponseDto {
-  @ApiProperty()
-  token: string;
-
   @ApiProperty({ type: User })
   user: User;
+
+  @ApiPropertyOptional({ 
+    description: 'Custom token for Firebase client SDK (only in login/register)' 
+  })
+  customToken?: string;
+
+  @ApiProperty()
+  message: string;
+}
+
+export class TokenResponseDto {
+  @ApiProperty({ description: 'Custom token from HTTPOnly cookie' })
+  customToken: string;
 
   @ApiProperty()
   message: string;

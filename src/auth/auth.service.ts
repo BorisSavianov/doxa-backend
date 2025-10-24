@@ -1,5 +1,5 @@
 // ============================================
-// AUTH SERVICE
+// AUTH SERVICE (IMPROVED)
 // src/auth/auth.service.ts
 // ============================================
 
@@ -11,8 +11,9 @@ import {
 } from '@nestjs/common';
 import { FirebaseService } from '../firebase/firebase.service';
 import { UsersService } from '../users/users.service';
-import { LoginDto, RegisterDto, AuthResponseDto } from './dto/auth.dto';
+import { LoginDto, RegisterDto, AuthResponseDto, TokenResponseDto } from './dto/auth.dto';
 import * as admin from 'firebase-admin';
+import { Response, Request } from 'express';
 
 @Injectable()
 export class AuthService {
@@ -21,11 +22,8 @@ export class AuthService {
     private usersService: UsersService,
   ) {}
 
-  async login(loginDto: LoginDto): Promise<AuthResponseDto> {
+  async login(loginDto: LoginDto, res: Response): Promise<AuthResponseDto> {
     try {
-      // Note: Firebase Admin SDK doesn't directly support email/password login
-      // This would typically be done on the client side using Firebase Auth SDK
-      // Here we verify if the user exists in our system
       const auth = this.firebaseService.getAuth();
 
       // Get user by email
@@ -45,9 +43,12 @@ export class AuthService {
       // Generate custom token for the user
       const customToken = await auth.createCustomToken(firebaseUser.uid);
 
+      // Set HTTPOnly cookie with custom token
+      this.setAuthCookie(res, customToken);
+
       return {
-        token: customToken,
         user: user,
+        customToken: customToken, // Send token so client can exchange it
         message: 'Login successful',
       };
     } catch (error) {
@@ -61,7 +62,10 @@ export class AuthService {
     }
   }
 
-  async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
+  async register(
+    registerDto: RegisterDto,
+    res: Response,
+  ): Promise<AuthResponseDto> {
     try {
       const auth = this.firebaseService.getAuth();
 
@@ -70,7 +74,6 @@ export class AuthService {
         await auth.getUserByEmail(registerDto.email);
         throw new ConflictException('User with this email already exists');
       } catch (error) {
-        // User doesn't exist, which is what we want
         if (error instanceof ConflictException) {
           throw error;
         }
@@ -97,9 +100,12 @@ export class AuthService {
       // Generate custom token
       const customToken = await auth.createCustomToken(firebaseUser.uid);
 
+      // Set HTTPOnly cookie
+      this.setAuthCookie(res, customToken);
+
       return {
-        token: customToken,
         user: user,
+        customToken: customToken,
         message: 'Registration successful',
       };
     } catch (error) {
@@ -116,13 +122,48 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    const auth = this.firebaseService.getAuth();
-    const customToken = await auth.createCustomToken(uid);
-
     return {
-      token: customToken,
       user: user,
       message: 'Token verified',
     };
+  }
+
+  async getTokenFromCookie(req: Request): Promise<TokenResponseDto> {
+    const customToken = req.cookies?.auth_token;
+    
+    if (!customToken) {
+      throw new UnauthorizedException('No authentication cookie found');
+    }
+
+    return {
+      customToken: customToken,
+      message: 'Token retrieved from cookie',
+    };
+  }
+
+  async logout(res: Response): Promise<{ message: string }> {
+    this.clearAuthCookie(res);
+    return { message: 'Successfully logged out' };
+  }
+
+  private setAuthCookie(res: Response, token: string): void {
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      secure: isProduction, // Only secure in production (HTTPS)
+      sameSite: isProduction ? 'strict' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      path: '/',
+    });
+  }
+
+  private clearAuthCookie(res: Response): void {
+    res.clearCookie('auth_token', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      path: '/',
+    });
   }
 }
