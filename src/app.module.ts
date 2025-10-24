@@ -1,5 +1,5 @@
 // ============================================
-// MAIN APPLICATION MODULE
+// MAIN APPLICATION MODULE (UPDATED)
 // src/app.module.ts
 // ============================================
 
@@ -13,6 +13,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { UnavailabilityModule } from './unavailability/unavailability.module';
 import { FirebaseModule } from './firebase/firebase.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { CronModule } from './cron/cron.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     NotificationsModule,
     UnavailabilityModule,
     DashboardModule,
+    CronModule,
   ],
 })
 export class AppModule {}

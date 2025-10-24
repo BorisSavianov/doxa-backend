@@ -16,6 +16,7 @@ import {
 } from '../common/entities/procedure.entity';
 import { JurySelectionService } from '../jury/jury-selection.service';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class ProceduresService {
@@ -25,6 +26,7 @@ export class ProceduresService {
     private firebaseService: FirebaseService,
     private jurySelectionService: JurySelectionService,
     private usersService: UsersService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async findAll(): Promise<Procedure[]> {
@@ -52,14 +54,10 @@ export class ProceduresService {
 
   async findByUserId(userId: string): Promise<Procedure[]> {
     const db = this.firebaseService.getFirestore();
-    const snapshot = await db
-      .collection(this.collection)
-      .where('juryMembers', 'array-contains', { userId })
-      .orderBy('date', 'desc')
-      .get();
-
-    return snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() }) as Procedure,
+    const allProcedures = await this.findAll();
+    
+    return allProcedures.filter(proc => 
+      proc.juryMembers.some(member => member.userId === userId)
     );
   }
 
@@ -86,9 +84,12 @@ export class ProceduresService {
   async autoSelectJury(procedureId: string): Promise<Procedure> {
     const procedure = await this.findById(procedureId);
 
-    if (procedure.status !== ProcedureStatus.DRAFT) {
+    if (
+      procedure.status !== ProcedureStatus.DRAFT &&
+      procedure.status !== ProcedureStatus.AWAITING_CONFIRMATIONS
+    ) {
       throw new BadRequestException(
-        'Jury can only be selected for draft procedures',
+        'Jury can only be selected for draft or awaiting confirmation procedures',
       );
     }
 
@@ -98,28 +99,52 @@ export class ProceduresService {
       .filter((p) => p.id !== procedureId)
       .map((p) => p.id);
 
+    // Get list of users who have already rejected
+    const rejectedUserIds = procedure.juryMembers
+      .filter((m) => m.status === 'rejected')
+      .map((m) => m.userId);
+
+    // Get list of users who are currently in the jury (accepted or pending)
+    const currentJuryUserIds = procedure.juryMembers
+      .filter((m) => m.status === 'accepted' || m.status === 'pending')
+      .map((m) => m.userId);
+
     const selectedJury = await this.jurySelectionService.selectJury(
       procedure.type,
       procedure.scientificField,
       procedure.date,
       sameDayIds,
+      [...rejectedUserIds, ...currentJuryUserIds],
     );
 
-    const juryMembers: JuryMember[] = [
-      ...selectedJury.internal.map((u) => ({
-        userId: u.id,
-        isExternal: false,
-        isReserve: false,
-        status: 'pending' as const,
-        invitedAt: new Date(),
-      })),
-      ...selectedJury.external.map((u) => ({
-        userId: u.id,
-        isExternal: true,
-        isReserve: false,
-        status: 'pending' as const,
-        invitedAt: new Date(),
-      })),
+    // Keep existing accepted and pending members
+    const existingMembers = procedure.juryMembers.filter(
+      (m) => m.status === 'accepted' || m.status === 'pending',
+    );
+
+    // Only add new members if we need to fill positions
+    const newMembers: JuryMember[] = [];
+    const allNewCandidates = [
+      ...selectedJury.internal,
+      ...selectedJury.external,
+    ];
+
+    for (const candidate of allNewCandidates) {
+      if (!existingMembers.some((m) => m.userId === candidate.id)) {
+        newMembers.push({
+          userId: candidate.id,
+          isExternal: candidate.university !== 'Великотърновски университет',
+          isReserve: false,
+          status: 'pending' as const,
+          invitedAt: new Date(),
+        });
+      }
+    }
+
+    // Update or add reserves
+    const updatedJuryMembers: JuryMember[] = [
+      ...existingMembers,
+      ...newMembers,
       {
         userId: selectedJury.reserves.internal.id,
         isExternal: false,
@@ -136,10 +161,20 @@ export class ProceduresService {
       },
     ];
 
-    return this.update(procedureId, {
-      juryMembers,
+    const updatedProcedure = await this.update(procedureId, {
+      juryMembers: updatedJuryMembers,
       status: ProcedureStatus.AWAITING_CONFIRMATIONS,
     });
+
+    // Send notifications only to new members
+    if (newMembers.length > 0) {
+      await this.notificationsService.notifyJuryInvitation(
+        updatedProcedure,
+        newMembers.map((m) => m.userId),
+      );
+    }
+
+    return updatedProcedure;
   }
 
   async respondToInvitation(
@@ -162,7 +197,7 @@ export class ProceduresService {
       : 'rejected';
     procedure.juryMembers[memberIndex].respondedAt = new Date();
 
-    // If rejected, find a replacement
+    // If rejected, activate reserve and trigger auto-select for new reserves
     if (!accept && !procedure.juryMembers[memberIndex].isReserve) {
       const rejectedMember = procedure.juryMembers[memberIndex];
       const reserve = procedure.juryMembers.find(
@@ -170,7 +205,33 @@ export class ProceduresService {
       );
 
       if (reserve) {
+        // Activate the reserve
         reserve.isReserve = false;
+        reserve.invitedAt = new Date();
+        reserve.status = 'pending';
+
+        // Update procedure with activated reserve
+        await this.update(procedureId, {
+          juryMembers: procedure.juryMembers,
+        });
+
+        // Send notification to the newly activated reserve
+        await this.notificationsService.notifyJuryInvitation(
+          procedure,
+          [reserve.userId],
+        );
+
+        // Trigger auto-select to get new reserves
+        await this.autoSelectJury(procedureId);
+        
+        // Notify about the rejection
+        await this.notificationsService.notifyJuryResponse(
+          procedure,
+          userId,
+          false,
+        );
+
+        return this.findById(procedureId);
       }
     }
 
@@ -187,10 +248,19 @@ export class ProceduresService {
       procedure.status = ProcedureStatus.CONFIRMED;
     }
 
-    return this.update(procedureId, {
+    const updatedProcedure = await this.update(procedureId, {
       juryMembers: procedure.juryMembers,
       status: procedure.status,
     });
+
+    // Notify about the response
+    await this.notificationsService.notifyJuryResponse(
+      updatedProcedure,
+      userId,
+      accept,
+    );
+
+    return updatedProcedure;
   }
 
   async update(
@@ -233,14 +303,11 @@ export class ProceduresService {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    const snapshot = await db
-      .collection(this.collection)
-      .where('date', '>=', startOfDay)
-      .where('date', '<=', endOfDay)
-      .get();
-
-    return snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() }) as Procedure,
-    );
+    const allProcedures = await this.findAll();
+    
+    return allProcedures.filter(proc => {
+      const procDate = new Date(proc.date);
+      return procDate >= startOfDay && procDate <= endOfDay;
+    });
   }
 }

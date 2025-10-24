@@ -1,5 +1,5 @@
 // ============================================
-// NOTIFICATIONS MODULE
+// NOTIFICATIONS MODULE 
 // src/notifications/notifications.module.ts
 // ============================================
 
@@ -11,6 +11,6 @@ import { NotificationsController } from './notifications.controller';
 @Module({
   providers: [NotificationsGateway, NotificationsService],
   controllers: [NotificationsController],
-  exports: [NotificationsService],
+  exports: [NotificationsService, NotificationsGateway],
 })
 export class NotificationsModule {}

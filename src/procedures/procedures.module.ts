@@ -1,5 +1,5 @@
 // ============================================
-// PROCEDURES MODULE
+// PROCEDURES MODULE 
 // src/procedures/procedures.module.ts
 // ============================================
 
@@ -8,9 +8,10 @@ import { ProceduresController } from './procedures.controller';
 import { ProceduresService } from './procedures.service';
 import { JuryModule } from '../jury/jury.module';
 import { UsersModule } from '../users/users.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [JuryModule, UsersModule],
+  imports: [JuryModule, UsersModule, NotificationsModule],
   controllers: [ProceduresController],
   providers: [ProceduresService],
   exports: [ProceduresService],

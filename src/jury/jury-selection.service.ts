@@ -50,12 +50,16 @@ export class JurySelectionService {
     scientificField: string,
     procedureDate: Date,
     sameDayProcedures: string[] = [],
+    excludeUserIds: string[] = [],
   ): Promise<SelectedJury> {
     const requirements = this.getJuryRequirements(procedureType);
 
     // Get all eligible candidates
     let candidates =
       await this.usersService.findByScientificField(scientificField);
+
+    // Filter out excluded users (those who already rejected)
+    candidates = candidates.filter((u) => !excludeUserIds.includes(u.id));
 
     // Filter out unavailable users
     candidates = await this.filterAvailableCandidates(
@@ -73,23 +77,26 @@ export class JurySelectionService {
     const internalCandidates = candidates.filter(
       (u) => u.university === this.HOME_UNIVERSITY,
     );
+    
+    // Sort external candidates by distance (closest first)
     const externalCandidates = candidates
       .filter((u) => u.university !== this.HOME_UNIVERSITY)
       .sort((a, b) => a.distanceToCity - b.distanceToCity);
 
     // Separate professors and associate professors
-    const internalProfessors = internalCandidates.filter(
-      (u) => u.academicRank === AcademicRank.PROFESSOR,
-    );
-    const externalProfessors = externalCandidates.filter(
-      (u) => u.academicRank === AcademicRank.PROFESSOR,
-    );
-    const internalAssociate = internalCandidates.filter(
-      (u) => u.academicRank === AcademicRank.ASSOCIATE_PROFESSOR,
-    );
-    const externalAssociate = externalCandidates.filter(
-      (u) => u.academicRank === AcademicRank.ASSOCIATE_PROFESSOR,
-    );
+    const internalProfessors = internalCandidates
+      .filter((u) => u.academicRank === AcademicRank.PROFESSOR)
+      .sort((a, b) => a.distanceToCity - b.distanceToCity);
+    
+    const externalProfessors = externalCandidates
+      .filter((u) => u.academicRank === AcademicRank.PROFESSOR);
+    
+    const internalAssociate = internalCandidates
+      .filter((u) => u.academicRank === AcademicRank.ASSOCIATE_PROFESSOR)
+      .sort((a, b) => a.distanceToCity - b.distanceToCity);
+    
+    const externalAssociate = externalCandidates
+      .filter((u) => u.academicRank === AcademicRank.ASSOCIATE_PROFESSOR);
 
     // Calculate internal and external members needed
     const internalNeeded =
@@ -105,8 +112,7 @@ export class JurySelectionService {
     let internalProfsSelected = 0;
     let externalProfsSelected = 0;
 
-    // Try to distribute professors between internal and external
-    // Priority: external professors (closer distance)
+    // Priority: external professors (closest distance first - already sorted)
     for (const prof of externalProfessors) {
       if (
         selectedExternal.length < externalNeeded &&
@@ -148,7 +154,7 @@ export class JurySelectionService {
       }
     }
 
-    // Fill remaining external positions with associate professors
+    // Fill remaining external positions with associate professors (closest first)
     for (const assoc of externalAssociate) {
       if (selectedExternal.length < externalNeeded) {
         selectedExternal.push(assoc);
@@ -170,7 +176,7 @@ export class JurySelectionService {
       throw new BadRequestException('Not enough qualified candidates for jury');
     }
 
-    // Select reserves (1 internal, 1 external)
+    // Select reserves (1 internal, 1 external) - closest first
     const reserveInternal = internalCandidates.find(
       (u) => !selectedInternal.includes(u),
     );
